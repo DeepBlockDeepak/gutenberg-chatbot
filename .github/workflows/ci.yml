@@ -28,7 +28,7 @@ jobs:
           restore-keys: uv-${{ runner.os }}-
 
       - name: Install dependencies
-        run: uv install --dev
+        run: uv pip install .
 
       - name: Run Black
         run: uv run black --check .
