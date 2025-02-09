@@ -1,10 +1,74 @@
+import os
+
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
 from torch.utils.data import Dataset, DataLoader
+from tqdm import tqdm
 
 torch.manual_seed(1)
+
+# Ensure models directory exists
+MODEL_DIR = "models"
+os.makedirs(MODEL_DIR, exist_ok=True)
+device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+
+
+def load_model(checkpoint_path: str, model_class, device, optimizer=None):
+    """
+    Loads a saved model checkpoint and optionally restores the optimizer.
+
+    Args:
+        checkpoint_path: path to the saved checkpoint.
+        model_class: model to load.
+        device: device to load the model onto.
+        optimizer: optimizer.
+
+    Returns:
+        nn.Module: The loaded model.
+        int: The last trained epoch.
+        torch.optim.Optimizer (optional): The restored optimizer (if provided).
+    """
+    if not os.path.exists(checkpoint_path):
+        print(f"[WARNING] No model checkpoint found at {checkpoint_path}.")
+        return None, None
+
+    checkpoint = torch.load(checkpoint_path, map_location=device)
+    model = model_class(*checkpoint["init_args"]).to(device)
+    model.load_state_dict(checkpoint["model_state_dict"])
+    model.eval()
+
+    epoch = checkpoint["epoch"]
+
+    if optimizer:
+        optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+        return model, epoch, optimizer
+
+    return model, epoch
+
+
+def save_model(model, optimizer, epoch, checkpoint_path: str, init_args):
+    """
+    Saves the model state, optimizer state, and initialization arguments.
+
+    Args:
+        model: model to save.
+        optimizer: the optimizer used during training.
+        epoch: current epoch number.
+        checkpoint_path: path to save the checkpoint.
+        init_args: arguments used to initialize the model.
+    """
+    torch.save(
+        {
+            "epoch": epoch,
+            "init_args": init_args,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+        },
+        checkpoint_path,
+    )
+    print(f"Model saved to {checkpoint_path}")
 
 
 class TextDataset(Dataset):
@@ -19,33 +83,6 @@ class TextDataset(Dataset):
         features = torch.tensor(self.tokenized_text[idx : idx + self.seq_length])
         labels = torch.tensor(self.tokenized_text[idx + 1 : idx + self.seq_length + 1])
         return features, labels
-
-
-with open("datasets/book.txt", "r", encoding="utf-8") as f:
-    raw_text = f.read()
-
-# index chapter 1
-raw_text_ch1 = raw_text[1985:6468]
-print(raw_text_ch1[:117])
-
-
-# map tokens to ids and vice versa
-tokenized_text = list(raw_text)
-unique_character_tokens = sorted(list(set(tokenized_text)))
-c2ix = {ch: i for i, ch in enumerate(unique_character_tokens)}
-ix2c = {ix: ch for ch, ix in c2ix.items()}
-
-# Get the vocabulary size
-vocab_size = len(c2ix)
-
-
-tokenized_id_text = [c2ix[c] for c in tokenized_text]
-
-seq_length = 24
-dataset = TextDataset(tokenized_id_text, seq_length)
-
-batch_size = 48
-dataloader = DataLoader(dataset, batch_size, shuffle=True)
 
 
 ###############################################################################
@@ -93,40 +130,95 @@ class RNNModel(nn.Module):
 ###############################################################################
 # Training the model
 ###############################################################################
-# Hyperparameters
-embedding_dim = 32
-hidden_dim = 128
-num_layers = 1
-learning_rate = 0.003
-epochs = 10
+if __name__ == "__main__":
+    print(
+        f"Training on {torch.device('mps' if torch.backends.mps.is_available() else 'cpu')}"
+    )
 
-# Use GPU if available
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-print(f"Training on {device}")
+    # Load data
+    with open("datasets/pride_and_prejudice.txt", "r", encoding="utf-8") as f:
+        raw_text = f.read()
 
-# Instantiate model, loss, and optimizer
-model = RNNModel(vocab_size, embedding_dim, hidden_dim, num_layers).to(device)
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+    tokenized_text = list(raw_text)
+    unique_character_tokens = sorted(list(set(tokenized_text)))
+    c2ix = {ch: i for i, ch in enumerate(unique_character_tokens)}
+    ix2c = {ix: ch for ch, ix in c2ix.items()}
+    vocab_size = len(c2ix)
+    tokenized_id_text = [c2ix[c] for c in tokenized_text]
 
-# Training loop
-model.train()
-for epoch in range(epochs):
-    epoch_loss = 0.0
-    for batch_features, batch_labels in dataloader:
-        batch_features = batch_features.to(device)
-        batch_labels = batch_labels.to(device)
+    seq_length = 24
+    dataset = TextDataset(tokenized_id_text, seq_length)
+    batch_size = 48
+    dataloader = DataLoader(dataset, batch_size, shuffle=True)
 
-        optimizer.zero_grad()
-        logits, _ = model(batch_features)
-        # Reshape logits and labels for computing loss:
-        # logits: (batch * seq_length, vocab_size) and labels: (batch * seq_length)
-        loss = criterion(logits.view(-1, vocab_size), batch_labels.view(-1))
-        loss.backward()
-        optimizer.step()
-        epoch_loss += loss.item()
-    avg_loss = epoch_loss / len(dataloader)
-    print(f"Epoch [{epoch + 1}/{epochs}] Loss: {avg_loss:.4f}")
+    # Define model and optimizer
+    embedding_dim = 32
+    hidden_dim = 128
+    num_layers = 1
+    learning_rate = 0.003
+    epochs = 10
+    checkpoint_path = os.path.join(MODEL_DIR, "rnn_model.pth")
+
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    model = RNNModel(vocab_size, embedding_dim, hidden_dim, num_layers).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    # Check if a model exists before training
+    start_epoch = 0
+    if os.path.exists(checkpoint_path):
+        print(f"Loading model checkpoint from {checkpoint_path}...")
+        model, start_epoch, optimizer = load_model(
+            checkpoint_path, RNNModel, device, optimizer
+        )
+        print(f"Resuming training from epoch {start_epoch + 1}")
+
+    # Early stopping
+    patience = 3
+    best_loss = np.inf
+    epochs_no_improve = 0
+
+    # Training loop
+    model.train()
+    for epoch in range(start_epoch, epochs):
+        epoch_loss = 0.0
+        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
+
+        for batch_features, batch_labels in progress_bar:
+            batch_features = batch_features.to(device)
+            batch_labels = batch_labels.to(device)
+
+            optimizer.zero_grad()
+            logits, _ = model(batch_features)
+            loss = criterion(logits.view(-1, vocab_size), batch_labels.view(-1))
+            loss.backward()
+            optimizer.step()
+            epoch_loss += loss.item()
+            progress_bar.set_postfix(loss=f"{loss.item():.4f}")
+
+        avg_loss = epoch_loss / len(dataloader)
+        print(f"Epoch [{epoch + 1}/{epochs}] Loss: {avg_loss:.4f}")
+
+        # Save model if best so far
+        if avg_loss < best_loss:
+            best_loss = avg_loss
+            epochs_no_improve = 0
+            save_model(
+                model,
+                optimizer,
+                epoch + 1,
+                checkpoint_path,
+                (vocab_size, embedding_dim, hidden_dim, num_layers),
+            )
+            print(f"New best model saved with loss: {best_loss:.4f}")
+        else:
+            epochs_no_improve += 1
+            print(f"No improvement for {epochs_no_improve} epoch(s).")
+
+        # Early stopping
+        if epochs_no_improve >= patience:
+            print(f"Stopping early at epoch {epoch + 1}. Best loss: {best_loss:.4f}")
+            break  # Exit training loop early
 
 
 ###############################################################################
@@ -155,7 +247,8 @@ def generate_text(
     input_ids = [c2ix.get(ch, 0) for ch in start_text]
     input_tensor = torch.tensor(input_ids, dtype=torch.long).unsqueeze(0).to(device)
     hidden = None
-    generated = start_text
+    # generated = start_text
+    generated = ""
 
     with torch.no_grad():
         for _ in range(generation_length):
@@ -178,11 +271,16 @@ def generate_text(
 ###############################################################################
 # Prompt the user for input and generate text
 ###############################################################################
-if __name__ == "__main__":
-    seed_text = input("Enter seed text for generation: ")
-    # You can tweak the generation_length and temperature as desired
-    generated_text = generate_text(
-        model, seed_text, generation_length=200, temperature=0.8
-    )
-    print("\nGenerated text:")
-    print(generated_text)
+# if __name__ == "__main__":
+#     if os.path.exists(checkpoint_path):
+#         print(f"Loading trained model for text generation from {checkpoint_path}...")
+#         model, _ = load_model(checkpoint_path, RNNModel, device)
+#     else:
+#         print("No trained model found! Train the model first.")
+
+#     seed_text = input("Enter seed text for generation: ")
+#     generated_text = generate_text(
+#         model, seed_text, generation_length=200, temperature=0.8
+#     )
+#     print("\nGenerated text:")
+#     print(generated_text)
