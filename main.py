@@ -1,18 +1,12 @@
 from taipy.gui import Gui, State, notify
 import os
 
-from src.gutenberg_chatbot.model import generate_text, load_model, RNNModel, device
+from gutenberg_chatbot.model import generate_text, load_model, RNNModel, device
+from gutenberg_chatbot.training.training import load_vocab_mappings
 
-
-# Variable context for taipy 'page'
-client = None
-context = "The following is a conversation with local text-generation model.\n\nHuman: Hello, who are you?\nAI: I am an AI. How can I help you today? "
-conversation = {
-    "Conversation": [
-        "Who are you?",
-        "I am a locally trained model. How can I help you today?",
-    ]
-}
+# Necessary variable context for taipy 'page' object upon startup
+context = ""
+conversation = {}
 current_user_message = ""
 past_conversations = []
 selected_conv = None
@@ -26,13 +20,7 @@ def on_init(state: State) -> None:
     """
     Initialize the app.
     """
-    # TODO: think about replacing the Ai response with a reference to the trained corpus,
-    # or with an init'd response from the trained model to kick things off with flavor
-    state.context = (
-        "The following is a conversation with a local text-generation model.\n\n"
-        "Human: Hello, who are you?\n"
-        "AI: I am a locally trained model. How can I help you today?"
-    )
+    state.context = ""
     state.conversation = {
         "Conversation": [
             "Who are you?",
@@ -45,13 +33,29 @@ def on_init(state: State) -> None:
     state.selected_row = [1]
 
 
-################################
-# TODO: STUB: Replace with actual local model import/logic
-################################
-
 MODEL_DIR = "models"
 checkpoint_path = os.path.join(MODEL_DIR, "rnn_model.pth")
-model, _ = load_model(checkpoint_path, RNNModel, device)
+
+# load the model
+result = load_model(checkpoint_path, RNNModel, device)
+
+# no model found or load failed
+if result is None or result[0] is None:
+    print("No model found. Please train first.")
+    model = None
+    c2ix, ix2c = {}, {}
+else:
+    model, start_epoch, corpus_name = result
+
+    # load the corresponding vocab to the corpus that was used
+    vocab_path = os.path.join(MODEL_DIR, f"{corpus_name}_vocab.json")
+    if os.path.exists(vocab_path):
+        c2ix, ix2c = load_vocab_mappings(vocab_path)
+    else:
+        print(
+            f"[WARNING] No vocab file {vocab_path} found. The model may fail to generate properly."
+        )
+        c2ix, ix2c = {}, {}
 
 
 def generate_response(state: State, prompt: str) -> str:
@@ -62,63 +66,67 @@ def generate_response(state: State, prompt: str) -> str:
         return "I'm currently unavailable for responses. Please try again later."
 
     generated_text = generate_text(
-        model, prompt, generation_length=200, temperature=0.8
+        model, prompt, c2ix, ix2c, generation_length=200, temperature=0.8
     )
 
     return generated_text
 
 
-# def update_context(state: State) -> str:
-#     """
-#     Update the context with the user's message and the model's response.
-#     """
-#     # add user’s message to the context
-#     state.context += f"Human: \n{state.current_user_message}\n\nAI:"
+def build_prompt_from_turns(state: State, num_turns: int = 3) -> str:
+    """
+    Construct a prompt from the last `num_turns` user-AI pairs in the conversation.
+    """
+    conversation_list = state.conversation["Conversation"]
+    # Each turn is 2 messages, so the last N turns is the last 2*N messages.
+    start_idx = max(0, len(conversation_list) - 2 * num_turns)
 
-#     # model inference
-#     answer = generate_response(state, state.context)
+    # consider a system prompt
+    # system_prompt = "You are a helpful, locally trained AI. Please answer politely.\n\n"
+    # prompt = system_prompt
 
-#     # append the answer to the context
-#     state.context += answer
-#     # keep track of new row index in the conversation table
-#     state.selected_row = [len(state.conversation["Conversation"]) + 1]
+    # construct a text block.
+    prompt = ""
+    for i in range(start_idx, len(conversation_list), 2):
+        user_msg = conversation_list[i]
+        ai_msg = ""
+        if i + 1 < len(conversation_list):
+            ai_msg = conversation_list[i + 1]
+        prompt += (
+            f"{user_msg}\n{ai_msg}\n"  # retain `Human: {user_msg} AI: {ai_msg} format?
+        )
 
-#     return answer
-
-MAX_CONTEXT_LENGTH = 1000  # Adjust based on your needs
+    return prompt
 
 
 def update_context(state: State) -> str:
-    """
-    Update the context with the user's message and the model's response.
-    """
-    # Append only the raw user message (not "Human:")
-    new_input = f"{state.current_user_message}\n"
+    # build prompt from last N turns
+    prompt = build_prompt_from_turns(state, num_turns=3)
+    # adding the new user message to the prompt
+    prompt += state.current_user_message
 
-    # Truncate the context while keeping the most recent portion
-    truncated_context = (state.context + new_input)[-MAX_CONTEXT_LENGTH:]
+    # generate answer from the local model
+    answer = generate_response(state, prompt)
 
-    # Model inference using only the meaningful context
-    answer = generate_response(state, truncated_context)
+    # store the entire prompt in `state.context` even though it's not needed
+    state.context = prompt + answer
 
-    # Append AI response WITHOUT "AI:"
-    state.context = truncated_context + answer + "\n"
-
-    # Track conversation history correctly
+    # let the table know about it
     state.selected_row = [len(state.conversation["Conversation"]) + 1]
-
     return answer
 
 
 def send_message(state: State) -> None:
     """
     Send user's message to model and update context.
+    User types a message into the input field ({current_user_message} in the UI).
+    Taipy calls send_message(state) when the user submits
     """
     notify(state, "info", "Sending message...")
-    answer = update_context(state)
+    answer = update_context(state)  # generate a response from the model
     conv = state.conversation.copy()
     conv["Conversation"] += [state.current_user_message, answer]
-    state.current_user_message = ""
+    state.current_user_message = ""  # clear the old user message
+    # table bound to state.conversation now has new row of user+model exchange
     state.conversation = conv
     notify(state, "success", "Response received!")
 
@@ -186,7 +194,8 @@ def select_conv(state: State, var_name: str, value) -> None:
     for i in range(2, len(saved_conv["Conversation"]), 2):
         user_msg = saved_conv["Conversation"][i]
         ai_msg = saved_conv["Conversation"][i + 1]
-        state.context += f"\nHuman:\n{user_msg}\n\nAI:{ai_msg}"
+        # retain `Human: {user_msg} AI: {ai_msg} format?
+        state.context += f"{user_msg}\n{ai_msg}\n"
 
     # move selected row to the bottom of conversation
     state.selected_row = [len(saved_conv["Conversation"]) + 1]
@@ -195,7 +204,8 @@ def select_conv(state: State, var_name: str, value) -> None:
 page = """
 <|layout|columns=300px 1|
 <|part|class_name=sidebar|
-# Taipy **Chat**{: .color-primary} # {: .logo-text}
+# RNN **Chat**{: .color-primary} # {: .logo-text}
+This is my chat interface using a locally trained RNN.
 <|New Conversation|button|class_name=fullwidth plain|id=reset_app_button|on_action=reset_chat|>
 ### Previous activities ### {: .h5 .mt2 .mb-half}
 <|{selected_conv}|tree|lov={past_conversations}|class_name=past_prompts_list|multiple|adapter=tree_adapter|on_change=select_conv|>
@@ -204,16 +214,14 @@ page = """
 <|part|class_name=p2 align-item-bottom table|
 <|{conversation}|table|row_class_name=style_conv|show_all|selected={selected_row}|rebuild|>
 <|part|class_name=card mt1|
-<|{current_user_message}|input|label=Write your message here...|on_action=send_message|class_name=fullwidth|change_delay=-1|>
+<|{current_user_message}|input|label=Write here...|on_action=send_message|class_name=fullwidth|change_delay=-1|>
 |>
 |>
 |>
 """
 
 if __name__ == "__main__":
-    # model loading here?
-    # set it on state or a global var?
 
     Gui(page).run(
-        debug=True, dark_mode=True, use_reloader=True, title="💬 Taipy Chat", port=5001
+        debug=True, dark_mode=True, use_reloader=True, title="💬 RNN Chat", port=5001
     )

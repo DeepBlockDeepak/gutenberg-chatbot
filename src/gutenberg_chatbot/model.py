@@ -1,21 +1,31 @@
 import os
+from typing import Optional
 
-import numpy as np
+
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from tqdm import tqdm
+from torch.utils.data import Dataset
 
 torch.manual_seed(1)
 
 # Ensure models directory exists
 MODEL_DIR = "models"
 os.makedirs(MODEL_DIR, exist_ok=True)
-device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+match (torch.cuda.is_available(), torch.backends.mps.is_available()):
+    case (True, _):
+        device = torch.device("cuda")
+    case (False, True):
+        device = torch.device("mps")
+    case _:
+        device = torch.device("cpu")
 
 
-def load_model(checkpoint_path: str, model_class, device, optimizer=None):
+def load_model(
+    checkpoint_path: str,
+    model_class,
+    device,
+    optimizer: Optional[torch.optim.Optimizer] = None,
+):
     """
     Loads a saved model checkpoint and optionally restores the optimizer.
 
@@ -40,15 +50,24 @@ def load_model(checkpoint_path: str, model_class, device, optimizer=None):
     model.eval()
 
     epoch = checkpoint["epoch"]
+    # retrieve corpus_name
+    corpus_name = checkpoint.get("corpus_name", "UNKNOWN_CORPUS")
 
     if optimizer:
         optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
-        return model, epoch, optimizer
+        return model, epoch, optimizer, corpus_name
 
-    return model, epoch
+    return model, epoch, corpus_name
 
 
-def save_model(model, optimizer, epoch, checkpoint_path: str, init_args):
+def save_model(
+    model: nn.Module,
+    optimizer: torch.optim.Optimizer,
+    epoch: int,
+    checkpoint_path: str,
+    init_args: tuple,
+    corpus_name: str,
+):
     """
     Saves the model state, optimizer state, and initialization arguments.
 
@@ -58,6 +77,7 @@ def save_model(model, optimizer, epoch, checkpoint_path: str, init_args):
         epoch: current epoch number.
         checkpoint_path: path to save the checkpoint.
         init_args: arguments used to initialize the model.
+        corpus_name: A string identifying which text/corpus was used.
     """
     torch.save(
         {
@@ -65,6 +85,7 @@ def save_model(model, optimizer, epoch, checkpoint_path: str, init_args):
             "init_args": init_args,
             "model_state_dict": model.state_dict(),
             "optimizer_state_dict": optimizer.state_dict(),
+            "corpus_name": corpus_name,
         },
         checkpoint_path,
     )
@@ -72,7 +93,14 @@ def save_model(model, optimizer, epoch, checkpoint_path: str, init_args):
 
 
 class TextDataset(Dataset):
-    def __init__(self, tokenized_text, seq_length):
+    """Simple PyTorch Dataset for character-based language modeling."""
+
+    def __init__(self, tokenized_text: list[int], seq_length: int):
+        """
+        Args:
+            tokenized_text: The entire text as a list of token IDs.
+            seq_length: Number of tokens in the input sequence.
+        """
         self.tokenized_text = tokenized_text
         self.seq_length = seq_length
 
@@ -85,9 +113,6 @@ class TextDataset(Dataset):
         return features, labels
 
 
-###############################################################################
-# Define the RNN (LSTM) model
-###############################################################################
 class RNNModel(nn.Module):
     """A simple LSTM-based language model."""
 
@@ -101,7 +126,7 @@ class RNNModel(nn.Module):
             hidden_dim (int): Number of features in the hidden state.
             num_layers (int): Number of recurrent layers.
         """
-        super(RNNModel, self).__init__()
+        super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
         self.lstm = nn.LSTM(embedding_dim, hidden_dim, num_layers, batch_first=True)
         self.fc = nn.Linear(hidden_dim, vocab_size)
@@ -127,106 +152,11 @@ class RNNModel(nn.Module):
         return logits, hidden
 
 
-###############################################################################
-# Training the model
-###############################################################################
-if __name__ == "__main__":
-    print(
-        f"Training on {torch.device('mps' if torch.backends.mps.is_available() else 'cpu')}"
-    )
-
-    # Load data
-    with open("datasets/pride_and_prejudice.txt", "r", encoding="utf-8") as f:
-        raw_text = f.read()
-
-    tokenized_text = list(raw_text)
-    unique_character_tokens = sorted(list(set(tokenized_text)))
-    c2ix = {ch: i for i, ch in enumerate(unique_character_tokens)}
-    ix2c = {ix: ch for ch, ix in c2ix.items()}
-    vocab_size = len(c2ix)
-    tokenized_id_text = [c2ix[c] for c in tokenized_text]
-
-    seq_length = 24
-    dataset = TextDataset(tokenized_id_text, seq_length)
-    batch_size = 48
-    dataloader = DataLoader(dataset, batch_size, shuffle=True)
-
-    # Define model and optimizer
-    embedding_dim = 32
-    hidden_dim = 128
-    num_layers = 1
-    learning_rate = 0.003
-    epochs = 10
-    checkpoint_path = os.path.join(MODEL_DIR, "rnn_model.pth")
-
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-    model = RNNModel(vocab_size, embedding_dim, hidden_dim, num_layers).to(device)
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-
-    # Check if a model exists before training
-    start_epoch = 0
-    if os.path.exists(checkpoint_path):
-        print(f"Loading model checkpoint from {checkpoint_path}...")
-        model, start_epoch, optimizer = load_model(
-            checkpoint_path, RNNModel, device, optimizer
-        )
-        print(f"Resuming training from epoch {start_epoch + 1}")
-
-    # Early stopping
-    patience = 3
-    best_loss = np.inf
-    epochs_no_improve = 0
-
-    # Training loop
-    model.train()
-    for epoch in range(start_epoch, epochs):
-        epoch_loss = 0.0
-        progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}", leave=True)
-
-        for batch_features, batch_labels in progress_bar:
-            batch_features = batch_features.to(device)
-            batch_labels = batch_labels.to(device)
-
-            optimizer.zero_grad()
-            logits, _ = model(batch_features)
-            loss = criterion(logits.view(-1, vocab_size), batch_labels.view(-1))
-            loss.backward()
-            optimizer.step()
-            epoch_loss += loss.item()
-            progress_bar.set_postfix(loss=f"{loss.item():.4f}")
-
-        avg_loss = epoch_loss / len(dataloader)
-        print(f"Epoch [{epoch + 1}/{epochs}] Loss: {avg_loss:.4f}")
-
-        # Save model if best so far
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            epochs_no_improve = 0
-            save_model(
-                model,
-                optimizer,
-                epoch + 1,
-                checkpoint_path,
-                (vocab_size, embedding_dim, hidden_dim, num_layers),
-            )
-            print(f"New best model saved with loss: {best_loss:.4f}")
-        else:
-            epochs_no_improve += 1
-            print(f"No improvement for {epochs_no_improve} epoch(s).")
-
-        # Early stopping
-        if epochs_no_improve >= patience:
-            print(f"Stopping early at epoch {epoch + 1}. Best loss: {best_loss:.4f}")
-            break  # Exit training loop early
-
-
-###############################################################################
-# Text generation function using the trained model
-###############################################################################
 def generate_text(
     model: nn.Module,
-    start_text: str,
+    seed_text: str,
+    c2ix: dict[str, int],
+    ix2c: dict[int, str],
     generation_length: int = 100,
     temperature: float = 1.0,
 ) -> str:
@@ -234,53 +164,37 @@ def generate_text(
     Generate text from the model given a seed input.
 
     Args:
-        model (nn.Module): Trained language model.
-        start_text (str): Seed text to start generation.
-        generation_length (int): Number of characters to generate.
-        temperature (float): Sampling temperature; higher values yield more random predictions.
+        model: The trained RNNModel.
+        seed_text: Seed string for generation.
+        c2ix: Dict mapping characters to token IDs.
+        ix2c: Dict mapping token IDs to characters.
+        generation_length: Number of characters to generate.
+        temperature: Sampling temperature; higher values => more randomness.
 
     Returns:
         str: The generated text.
     """
     model.eval()
-    # Convert seed text to token ids (if a character is not found, default to index 0)
-    input_ids = [c2ix.get(ch, 0) for ch in start_text]
+    # convert seed text to token ids (unknown chars default to index 0).
+    input_ids = [c2ix.get(ch, 0) for ch in seed_text]
     input_tensor = torch.tensor(input_ids, dtype=torch.long).unsqueeze(0).to(device)
+
+    generated_str = ""
     hidden = None
-    # generated = start_text
-    generated = ""
 
     with torch.no_grad():
         for _ in range(generation_length):
             logits, hidden = model(input_tensor, hidden)
-            # Only consider the output from the last time step
+            # only consider the output from the last time step
             last_logits = logits[:, -1, :]
-            # Adjust logits by the temperature parameter
+            # adjust logits by the temperature
             last_logits /= temperature
-            probabilities = torch.softmax(last_logits, dim=-1)
-            # Sample the next character id from the probability distribution
-            next_token_id = torch.multinomial(probabilities, num_samples=1).item()
+            probs = torch.softmax(last_logits, dim=-1)
+            # sample from the distribution
+            next_token_id = torch.multinomial(probs, num_samples=1).item()
             next_char = ix2c[next_token_id]
-            generated += next_char
-            # Prepare input tensor for next prediction (shape: [1, 1])
+            generated_str += next_char
+            # prepare input for next iteration
             input_tensor = torch.tensor([[next_token_id]], dtype=torch.long).to(device)
 
-    return generated
-
-
-###############################################################################
-# Prompt the user for input and generate text
-###############################################################################
-# if __name__ == "__main__":
-#     if os.path.exists(checkpoint_path):
-#         print(f"Loading trained model for text generation from {checkpoint_path}...")
-#         model, _ = load_model(checkpoint_path, RNNModel, device)
-#     else:
-#         print("No trained model found! Train the model first.")
-
-#     seed_text = input("Enter seed text for generation: ")
-#     generated_text = generate_text(
-#         model, seed_text, generation_length=200, temperature=0.8
-#     )
-#     print("\nGenerated text:")
-#     print(generated_text)
+    return generated_str
