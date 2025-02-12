@@ -1,0 +1,21 @@
+/* main.css */
+.user_message {
+    background-color: #e1ffc7;
+    border-radius: 10px;
+    padding: 8px;
+    margin: 5px 0;
+}
+  
+.ai_message {
+    background-color: #827171;
+    border-radius: 10px;
+    padding: 8px;
+    margin: 5px 0;
+}
+  
+/* additional classes */
+.input-container {
+    padding: 1rem;
+    background-color: #54988f;
+}
+  

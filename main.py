@@ -207,13 +207,16 @@ page = """
 # RNN **Chat**{: .color-primary} # {: .logo-text}
 This is my chat interface using a locally trained RNN.
 <|New Conversation|button|class_name=fullwidth plain|id=reset_app_button|on_action=reset_chat|>
+
+<|Train Model|button|class_name=fullwidth plain|on_action=trigger_training|>
+
 ### Previous activities ### {: .h5 .mt2 .mb-half}
 <|{selected_conv}|tree|lov={past_conversations}|class_name=past_prompts_list|multiple|adapter=tree_adapter|on_change=select_conv|>
 |>
 
 <|part|class_name=p2 align-item-bottom table|
 <|{conversation}|table|row_class_name=style_conv|show_all|selected={selected_row}|rebuild|>
-<|part|class_name=card mt1|
+<|part|class_name=input-container|
 <|{current_user_message}|input|label=Write here...|on_action=send_message|class_name=fullwidth|change_delay=-1|>
 |>
 |>
@@ -221,7 +224,6 @@ This is my chat interface using a locally trained RNN.
 """
 
 if __name__ == "__main__":
-
-    Gui(page).run(
+    Gui(page, css_file="static/main.css").run(
         debug=True, dark_mode=True, use_reloader=True, title="💬 RNN Chat", port=5001
     )
