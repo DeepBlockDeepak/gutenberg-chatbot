@@ -1,8 +1,7 @@
 from taipy.gui import Gui, State, notify
-import os
 
-from gutenberg_chatbot.model import generate_text, load_model, RNNModel, device
-from gutenberg_chatbot.training.training import load_vocab_mappings
+from gutenberg_chatbot.model import generate_text
+from gutenberg_chatbot.model_bootstrap import load_default_model_and_vocab
 
 # Necessary variable context for taipy 'page' object upon startup
 context = ""
@@ -11,6 +10,9 @@ current_user_message = ""
 past_conversations = []
 selected_conv = None
 selected_row = [1]
+
+# default model loading
+model, c2ix, ix2c = load_default_model_and_vocab()
 
 
 ################################
@@ -31,31 +33,6 @@ def on_init(state: State) -> None:
     state.past_conversations = []
     state.selected_conv = None
     state.selected_row = [1]
-
-
-MODEL_DIR = "models"
-checkpoint_path = os.path.join(MODEL_DIR, "rnn_model.pth")
-
-# load the model
-result = load_model(checkpoint_path, RNNModel, device)
-
-# no model found or load failed
-if result is None or result[0] is None:
-    print("No model found. Please train first.")
-    model = None
-    c2ix, ix2c = {}, {}
-else:
-    model, start_epoch, corpus_name = result
-
-    # load the corresponding vocab to the corpus that was used
-    vocab_path = os.path.join(MODEL_DIR, f"{corpus_name}_vocab.json")
-    if os.path.exists(vocab_path):
-        c2ix, ix2c = load_vocab_mappings(vocab_path)
-    else:
-        print(
-            f"[WARNING] No vocab file {vocab_path} found. The model may fail to generate properly."
-        )
-        c2ix, ix2c = {}, {}
 
 
 def generate_response(state: State, prompt: str) -> str:
