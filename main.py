@@ -3,7 +3,7 @@ from taipy.gui import Gui, State, notify
 from gutenberg_chatbot.model import generate_text
 from gutenberg_chatbot.model_bootstrap import load_default_model_and_vocab
 
-# Necessary variable context for taipy 'page' object upon startup
+# Necessary variable context for taipy 'page' template object upon startup
 context = ""
 conversation = {}
 current_user_message = ""
