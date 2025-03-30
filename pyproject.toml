@@ -4,10 +4,10 @@ version = "0.1.0"
 description = "Project Gutenberg Chatbot app"
 readme = "README.md"
 authors = [
-    { name = "DeepBlockDeepak", email = "jordan.medina1729@gmail.com" }
+    { name = "Jordan Medina", email = "jordan.medina1@csuglobal.edu" }
 ]
 
-requires-python = ">=3.12"
+requires-python = ">=3.10"
 
 dependencies = [
     "numpy>=2.2.2",
@@ -15,12 +15,6 @@ dependencies = [
     "torch>=2.6.0",
     "tqdm>=4.67.1",
 ]
-
-[project.scripts]
-# pausing here until proper entry point is set up
-# gutenberg-chatbot = "gutenberg_chat_bot:main"
-# Need to figure out how to make a uv shortcut for triggering my precommit
-# pc-all = "pre-commit run --all-files"
 
 
 [build-system]

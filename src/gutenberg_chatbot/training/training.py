@@ -1,5 +1,6 @@
 import json
 import os
+
 import numpy as np
 import torch
 import torch.optim as optim
@@ -9,9 +10,9 @@ from tqdm import tqdm
 from gutenberg_chatbot.model import (
     RNNModel,
     TextDataset,
+    device,
     load_model,
     save_model,
-    device,
 )
 
 
@@ -36,7 +37,7 @@ def load_vocab_mappings(path):
 
 
 def train_rnn(
-    text_path: str,
+    training_corpus_text_path: str,
     checkpoint_path: str,
     seq_length: int = 24,
     batch_size: int = 48,
@@ -51,8 +52,8 @@ def train_rnn(
     Train or resume training of the RNN model on a text dataset.
 
     Args:
-        text_path (str): Path to the raw text file.
-        checkpoint_path (str): Where to save/load the model checkpoint.
+        training_corpus_text_path: Path to the raw text file.
+        checkpoint_path: Where to save/load the model checkpoint.
         seq_length, batch_size, etc: Hyperparameters.
         epochs: Max number of epochs to train.
         patience: Early-stopping patience.
@@ -61,7 +62,7 @@ def train_rnn(
         (model, c2ix, ix2c): The trained model and dictionaries for token mapping.
     """
     # load text
-    with open(text_path, "r", encoding="utf-8") as f:
+    with open(training_corpus_text_path, "r", encoding="utf-8") as f:
         raw_text = f.read()
 
     # build character dictionaries
@@ -70,13 +71,12 @@ def train_rnn(
     c2ix = {ch: i for i, ch in enumerate(unique_chars)}
     ix2c = {i: ch for ch, i in c2ix.items()}
     vocab_size = len(unique_chars)
+    token_ids = [c2ix[ch] for ch in tokenized_text]
 
     # save the character/token mapping
     # derive corpus_name from text_path
-    corpus_name = os.path.splitext(os.path.basename(text_path))[0]
+    corpus_name = os.path.splitext(os.path.basename(training_corpus_text_path))[0]
     save_vocab_mappings(c2ix, ix2c, f"models/{corpus_name}_vocab.json")
-
-    token_ids = [c2ix[ch] for ch in tokenized_text]
 
     # create dataset and dataloader
     dataset = TextDataset(token_ids, seq_length)
@@ -85,8 +85,14 @@ def train_rnn(
     # instantiate or load model
     model = RNNModel(vocab_size, embedding_dim, hidden_dim, num_layers).to(device)
     optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    start_epoch = 0
+    criterion = torch.nn.CrossEntropyLoss()
 
+    # training loop with early stopping
+    start_epoch = 0
+    best_loss = np.inf
+    epochs_no_improve = 0
+
+    # load the checkpoint_path if desired
     if os.path.exists(checkpoint_path):
         print(f"Loading checkpoint from {checkpoint_path}...")
         res = load_model(checkpoint_path, RNNModel, device, optimizer=optimizer)
@@ -95,12 +101,6 @@ def train_rnn(
         else:
             model, start_epoch = res
         print(f"Resuming training from epoch {start_epoch+1}")
-
-    criterion = torch.nn.CrossEntropyLoss()
-
-    # training loop with early stopping
-    best_loss = np.inf
-    epochs_no_improve = 0
 
     model.train()
     for epoch in range(start_epoch, epochs):
@@ -124,7 +124,7 @@ def train_rnn(
             best_loss = avg_loss
             epochs_no_improve = 0
 
-            # After training or in the best checkpoint condition:
+            # save best checkpoint:
             save_model(
                 model,
                 optimizer,
@@ -147,7 +147,7 @@ def train_rnn(
 
 if __name__ == "__main__":
     model, c2ix, ix2c = train_rnn(
-        text_path="datasets/pride_and_prejudice.txt",
+        training_corpus_text_path="datasets/pride_and_prejudice.txt",
         checkpoint_path="models/rnn_model.pth",
         epochs=10,
     )

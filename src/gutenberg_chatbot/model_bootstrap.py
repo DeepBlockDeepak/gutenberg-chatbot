@@ -1,6 +1,6 @@
 import os
 
-from gutenberg_chatbot.model import load_model, RNNModel, device
+from gutenberg_chatbot.model import RNNModel, device, load_model
 from gutenberg_chatbot.training.training import load_vocab_mappings
 
 

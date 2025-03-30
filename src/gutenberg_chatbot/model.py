@@ -1,7 +1,6 @@
 import os
 from typing import Optional
 
-
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
@@ -121,10 +120,10 @@ class RNNModel(nn.Module):
     ):
         """
         Args:
-            vocab_size (int): Number of unique tokens.
-            embedding_dim (int): Dimension of the embedding vector.
-            hidden_dim (int): Number of features in the hidden state.
-            num_layers (int): Number of recurrent layers.
+            vocab_size: Number of unique tokens.
+            embedding_dim: Dimension of the embedding vector.
+            hidden_dim: Number of features in the hidden state.
+            num_layers: Number of recurrent layers.
         """
         super().__init__()
         self.embedding = nn.Embedding(vocab_size, embedding_dim)
@@ -136,19 +135,20 @@ class RNNModel(nn.Module):
         Forward pass of the model.
 
         Args:
-            x (torch.Tensor): Input tensor of shape (batch, seq_length).
-            hidden (torch.Tensor, optional): Hidden state (if any).
+            x: Input tensor of shape (batch, seq_length).
+            hidden: Hidden state (if any).
 
         Returns:
             logits (torch.Tensor): Output logits for each token (batch, seq_length, vocab_size).
             hidden (torch.Tensor): The new hidden state.
         """
-        embedded = self.embedding(x)  # Shape: (batch, seq_length, embedding_dim)
+        embedded = self.embedding(x)  # shape: (batch, seq_length, embedding_dim)
         if hidden is None:
             output, hidden = self.lstm(embedded)
         else:
             output, hidden = self.lstm(embedded, hidden)
         logits = self.fc(output)
+
         return logits, hidden
 
 
