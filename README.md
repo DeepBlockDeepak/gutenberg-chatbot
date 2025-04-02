@@ -9,20 +9,16 @@ This project showcases a locally trained chatbot that uses a character-level LST
 
 All necessary Python packages will be installed automatically with **uv**.
 
-## Installation
+## Installation and Running
 
 After installing `uv` on your system...
 
-Run this to set up dependencies and the environment:
-```sh
-uv sync
-```
-
-## Running
-From project root, you can start the Chatbot application:
+From project root, you can set up dependencies + the environment, and start the Chatbot application all with:
 ```sh
 uv run main.py
 ```
+
+(combines the use of `uv sync` as a precursor to the driver)
 
 The local address which appears in terminal is `http://127.0.0.1:5001`, and will redirect you to the chatbot browser application session.
 

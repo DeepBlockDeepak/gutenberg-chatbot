@@ -1,7 +1,6 @@
 import json
 import os
 
-import numpy as np
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
@@ -89,7 +88,7 @@ def train_rnn(
 
     # training loop with early stopping
     start_epoch = 0
-    best_loss = np.inf
+    best_loss = float("inf")
     epochs_no_improve = 0
 
     # load the checkpoint_path if desired
